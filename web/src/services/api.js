@@ -29,8 +29,8 @@ export const checkStatus = async (folder) => {
     return response.data;
 };
 
-export const pushProject = async (folder, repoUrl) => {
-    const response = await api.post('/project/push', { folder, repoUrl });
+export const pushProject = async (folder, repoUrl, token) => {
+    const response = await api.post('/project/push', { folder, repoUrl, token });
     return response.data;
 };
 

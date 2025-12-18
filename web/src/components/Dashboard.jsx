@@ -9,6 +9,9 @@ const Dashboard = ({ onBack }) => {
     const [repoUrl, setRepoUrl] = useState('');
     const [status, setStatus] = useState('idle'); // idle, checking, pushing, success, error
     const [message, setMessage] = useState('');
+    const [isDragging, setIsDragging] = useState(false);
+    const [manualPath, setManualPath] = useState('');
+    const [githubToken, setGithubToken] = useState('');
     const [logs, setLogs] = useState([]);
 
     const addLog = (msg) => setLogs(prev => [...prev, `> ${msg}`]);
@@ -18,12 +21,43 @@ const Dashboard = ({ onBack }) => {
             const result = await selectFolder();
             if (result && result.path) {
                 setProjectPath(result.path);
+                setManualPath(result.path);
                 addLog(`Selected folder: ${result.path}`);
                 checkProjectStatus(result.path);
             }
         } catch (err) {
             console.error(err);
             addLog('Error selecting folder');
+        }
+    };
+
+    const handleDragOver = (e) => {
+        e.preventDefault();
+        setIsDragging(true);
+    };
+
+    const handleDragLeave = () => {
+        setIsDragging(false);
+    };
+
+    const handleDrop = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            const folderName = files[0].name;
+            addLog(`Dropped folder: ${folderName}. Please confirm the full path below.`);
+            setMessage(`Dropped folder detected. Please ensure the full path is correct below.`);
+            setStatus('idle');
+        }
+    };
+
+    const handleManualPathSubmit = (e) => {
+        e.preventDefault();
+        if (manualPath) {
+            setProjectPath(manualPath);
+            addLog(`Manual path set: ${manualPath}`);
+            checkProjectStatus(manualPath);
         }
     };
 
@@ -55,7 +89,7 @@ const Dashboard = ({ onBack }) => {
         addLog('Starting push sequence...');
 
         try {
-            const res = await pushProject(projectPath, repoUrl);
+            const res = await pushProject(projectPath, repoUrl, githubToken);
             if (res.success) {
                 setStatus('success');
                 setMessage('Project successfully pushed to GitHub.');
@@ -130,8 +164,11 @@ const Dashboard = ({ onBack }) => {
 
                                 <div
                                     onClick={handleSelectFolder}
-                                    className={`cursor-pointer group relative overflow-hidden rounded-lg border-2 border-dashed transition-all p-8 text-center
-                    ${projectPath ? 'border-neutral-900 bg-neutral-50' : 'border-neutral-200 hover:border-neutral-400 hover:bg-neutral-50'}`}
+                                    onDragOver={handleDragOver}
+                                    onDragLeave={handleDragLeave}
+                                    onDrop={handleDrop}
+                                    className={`cursor-pointer group relative overflow-hidden rounded-lg border-2 border-dashed transition-all p-8 text-center mb-6
+                    ${isDragging ? 'border-neutral-900 bg-neutral-100' : projectPath ? 'border-neutral-900 bg-neutral-50' : 'border-neutral-200 hover:border-neutral-400 hover:bg-neutral-50'}`}
                                 >
                                     <div className="flex flex-col items-center gap-4 relative z-10">
                                         <div className={`p-4 rounded-full ${projectPath ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-400 group-hover:bg-neutral-200 transition-colors'}`}>
@@ -142,12 +179,32 @@ const Dashboard = ({ onBack }) => {
                                                 <div className="font-mono text-sm font-medium">{projectPath}</div>
                                             ) : (
                                                 <>
-                                                    <div className="font-medium text-neutral-900">Select Project Folder</div>
-                                                    <div className="text-xs text-neutral-400 mt-1">Click to open system dialog</div>
+                                                    <div className="font-medium text-neutral-900">Select or Drag Project Folder</div>
+                                                    <div className="text-xs text-neutral-400 mt-1">Click to open system dialog or drag folder here</div>
                                                 </>
                                             )}
                                         </div>
                                     </div>
+                                </div>
+
+                                <div className="space-y-3">
+                                    <label className="text-xs font-semibold text-neutral-500 uppercase">Or enter full path manually</label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            value={manualPath}
+                                            onChange={(e) => setManualPath(e.target.value)}
+                                            placeholder="/Users/username/projects/my-app"
+                                            className="flex-1 bg-neutral-50 border border-neutral-200 rounded-lg py-2.5 px-4 text-sm font-mono focus:outline-none focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900 transition-all"
+                                        />
+                                        <button
+                                            onClick={handleManualPathSubmit}
+                                            className="px-6 py-2.5 bg-neutral-900 text-white rounded-lg text-xs font-bold uppercase hover:bg-neutral-800 transition-all shadow-sm"
+                                        >
+                                            Validate
+                                        </button>
+                                    </div>
+                                    <p className="text-[10px] text-neutral-400 italic">Security Note: Browsers cannot get full paths from drags. Please paste the path if dragging fails.</p>
                                 </div>
                             </div>
 
@@ -167,6 +224,20 @@ const Dashboard = ({ onBack }) => {
                                         placeholder="https://github.com/username/repository.git"
                                         className="w-full bg-neutral-50 border border-neutral-200 rounded-lg py-4 pl-12 pr-4 text-neutral-900 focus:outline-none focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900 transition-all placeholder:text-neutral-400 font-mono text-sm"
                                     />
+                                </div>
+
+                                <div className="mt-6 space-y-3">
+                                    <label className="text-xs font-semibold text-neutral-500 uppercase">Personal Access Token (Required for Private Repos / Auth)</label>
+                                    <input
+                                        type="password"
+                                        value={githubToken}
+                                        onChange={(e) => setGithubToken(e.target.value)}
+                                        placeholder="ghp_xxxxxxxxxxxx"
+                                        className="w-full bg-neutral-50 border border-neutral-200 rounded-lg py-3 px-4 text-sm font-mono focus:outline-none focus:border-neutral-900"
+                                    />
+                                    <p className="text-[10px] text-neutral-400">
+                                        You can generate a token in <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="underline text-neutral-600">GitHub Settings</a>.
+                                    </p>
                                 </div>
                             </div>
 

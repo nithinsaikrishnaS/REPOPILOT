@@ -9,11 +9,14 @@ const pickFolder = () => {
         const command = `osascript -e 'POSIX path of (choose folder with prompt "Select Project Folder")'`;
         exec(command, (error, stdout, stderr) => {
             if (error) {
+                const errorStr = stderr.toLowerCase() || error.message.toLowerCase();
                 // User cancelled or error
-                if (stderr.includes('User canceled')) {
+                if (errorStr.includes('user cancel')) {
+                    console.log('User cancelled folder selection dialog');
                     resolve(null);
                 } else {
-                    reject(error);
+                    console.error('osascript error detailed:', { error, stdout, stderr });
+                    reject(new Error(`Failed to pick folder: ${stderr || error.message}`));
                 }
             } else {
                 resolve(stdout.trim());
@@ -46,84 +49,149 @@ const gitController = {
 
         const git = simpleGit(folder);
         try {
-            const isRepo = await git.checkIsRepo();
+            // Check specifically for local .git folder to avoid parent interference
+            const localGitPath = path.join(folder, '.git');
+            const isLocalRepo = fs.existsSync(localGitPath) && fs.lstatSync(localGitPath).isDirectory();
+
             let hasRemote = false;
             let remotes = [];
 
-            if (isRepo) {
+            if (isLocalRepo) {
                 remotes = await git.getRemotes(true);
                 hasRemote = remotes.length > 0;
             }
 
             res.json({
-                isRepo,
+                isRepo: isLocalRepo,
                 hasRemote,
                 remotes
             });
         } catch (error) {
-            console.error('Status check error:', error);
-            res.status(500).json({ error: error.message });
+            console.error('Check status error:', error);
+            res.status(500).json({ error: 'Failed to check status' });
         }
     },
 
     // Initialize & Push
     // This is the "One-Click Push" logic
     pushProject: async (req, res) => {
-        const { folder, repoUrl, token } = req.body; // Token might be needed for https auth if not using SSH key, or user can assume SSH setup
+        const { folder, repoUrl, token } = req.body;
 
-        if (!folder || !repoUrl) {
-            return res.status(400).json({ error: 'Missing folder or repo URL' });
+        if (!folder || !fs.existsSync(folder)) {
+            return res.status(400).json({ error: 'Folder does not exist' });
+        }
+        if (!repoUrl) {
+            return res.status(400).json({ error: 'Missing repo URL' });
         }
 
-        const git = simpleGit(folder);
+        let formattedRepoUrl = repoUrl;
+        if (token) {
+            // Embed token for HTTPS auth: https://<token>@github.com/user/repo.git
+            try {
+                const url = new URL(repoUrl);
+                if (url.protocol === 'https:') {
+                    formattedRepoUrl = `https://${token}@${url.host}${url.pathname}${url.search}${url.hash}`;
+                }
+            } catch (e) {
+                console.error('Invalid repo URL for token embedding:', repoUrl);
+            }
+        }
+
+        const git = simpleGit(folder, {
+            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        });
 
         try {
-            // 1. Init if needed
-            const isRepo = await git.checkIsRepo();
-            if (!isRepo) {
+            console.log(`Push sequence started for: ${folder}`);
+
+            // 0. Ensure .gitignore exists to prevent hanging on large folders (.venv, node_modules)
+            const gitignorePath = path.join(folder, '.gitignore');
+            if (!fs.existsSync(gitignorePath)) {
+                console.log('No .gitignore found. Creating a default one to skip heavy folders...');
+                const defaultIgnore = `node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+.vscode/
+dist/
+build/
+`;
+                fs.writeFileSync(gitignorePath, defaultIgnore);
+                console.log('.gitignore created');
+            }
+
+            // 1. Init if needed - check specifically for local .git folder
+            const localGitPath = path.join(folder, '.git');
+            const isLocalRepo = fs.existsSync(localGitPath) && fs.lstatSync(localGitPath).isDirectory();
+
+            if (!isLocalRepo) {
+                console.log('Target folder is not a local git repo (ignoring parents). Initializing...');
                 await git.init();
-                console.log('Initialized git repo');
+                console.log('Initialized git repo successfully');
+            } else {
+                console.log('Existing local git repo detected');
             }
 
             // 2. Add all files
+            console.log('Adding files to staging...');
             await git.add('.');
+            console.log('Files added');
 
             // 3. Commit
             // Check if there are changes first
+            console.log('Checking git status...');
             const status = await git.status();
+            console.log(`Git status count: ${status.files.length} files changed`);
+
             if (status.files.length > 0) {
+                console.log(`Committing ${status.files.length} changed files...`);
                 await git.commit('Initial repository setup by Repopilot');
-                console.log('Committed files');
+                console.log('Committed files successfully');
             } else {
-                console.log('No changes to commit');
+                console.log('No changes to commit (clean working directory)');
             }
 
             // 4. Remote
+            console.log(`Configuring remote origin: ${formattedRepoUrl}`);
             const remotes = await git.getRemotes(true);
             const origin = remotes.find(r => r.name === 'origin');
 
             if (!origin) {
-                await git.addRemote('origin', repoUrl);
-            } else if (origin.refs.push !== repoUrl) {
-                // If origin exists but differs, update it? Or throw error?
-                // For MVP, simplified: update URL
+                await git.addRemote('origin', formattedRepoUrl);
+                console.log('Added remote origin');
+            } else if (origin.refs.push !== formattedRepoUrl) {
+                // If origin exists but differs, update it
                 await git.removeRemote('origin');
-                await git.addRemote('origin', repoUrl);
+                await git.addRemote('origin', formattedRepoUrl);
+                console.log('Updated remote origin URL');
+            } else {
+                console.log('Remote origin already matches target URL');
             }
 
             // 5. Push
             // Handle branch name (main vs master) - simple-git usually defaults to master unless changed.
             // Let's force rename to main for modern GitHub
+            console.log('Renaming branch to main...');
             await git.branch(['-M', 'main']);
 
             // Push
+            console.log('Attempting to push to GitHub (main)...');
             await git.push(['-u', 'origin', 'main']);
+            console.log('Push completed successfully!');
 
             res.json({ success: true, message: 'Project pushed successfully!' });
 
         } catch (error) {
-            console.error('Push error:', error);
-            res.status(500).json({ error: error.message, details: error });
+            console.error('Push operation failed:', error);
+            res.status(500).json({
+                error: error.message || 'Deployment failed',
+                details: error,
+                logs: 'Check server terminal for full trace'
+            });
         }
     }
 };
