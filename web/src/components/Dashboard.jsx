@@ -131,9 +131,6 @@ const Dashboard = ({ onBack }) => {
                     <button className="flex items-center gap-3 w-full px-3 py-2 bg-neutral-100 rounded-lg text-sm font-medium text-black">
                         <Folder className="w-4 h-4" /> New Project
                     </button>
-                    <button className="flex items-center gap-3 w-full px-3 py-2 hover:bg-neutral-50 rounded-lg text-sm font-medium text-neutral-600 transition-colors">
-                        <Github className="w-4 h-4" /> Connected Repos
-                    </button>
                 </nav>
 
                 <div className="p-4 border-t border-neutral-100">
