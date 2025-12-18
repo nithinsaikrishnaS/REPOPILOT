@@ -86,14 +86,19 @@ const gitController = {
 
         let formattedRepoUrl = repoUrl;
         if (token) {
-            // Embed token for HTTPS auth: https://<token>@github.com/user/repo.git
+            console.log('Token provided, formatting URL...');
             try {
                 const url = new URL(repoUrl);
                 if (url.protocol === 'https:') {
-                    formattedRepoUrl = `https://${token}@${url.host}${url.pathname}${url.search}${url.hash}`;
+                    // Use encodeURIComponent to handle special characters in tokens (@, :, etc)
+                    // Note: GitHub tokens are usually just the username part of the auth.
+                    // If the user provided a full ghp_ token, it works as the username.
+                    const safeToken = encodeURIComponent(token);
+                    formattedRepoUrl = `https://${safeToken}@${url.host}${url.pathname}${url.search}${url.hash}`;
+                    console.log(`Formatted URL constructed (token masked length: ${token.length})`);
                 }
             } catch (e) {
-                console.error('Invalid repo URL for token embedding:', repoUrl);
+                console.error('Invalid repo URL for token embedding:', repoUrl, e);
             }
         }
 
@@ -163,13 +168,16 @@ build/
             if (!origin) {
                 await git.addRemote('origin', formattedRepoUrl);
                 console.log('Added remote origin');
-            } else if (origin.refs.push !== formattedRepoUrl) {
-                // If origin exists but differs, update it
-                await git.removeRemote('origin');
-                await git.addRemote('origin', formattedRepoUrl);
-                console.log('Updated remote origin URL');
             } else {
-                console.log('Remote origin already matches target URL');
+                const pushUrl = origin.refs.push;
+                if (pushUrl !== formattedRepoUrl) {
+                    console.log(`Remote origin mismatch. Current: ${pushUrl.replace(token, 'TOKEN_MASKED')}, Target: ${formattedRepoUrl.replace(token, 'TOKEN_MASKED')}`);
+                    await git.removeRemote('origin');
+                    await git.addRemote('origin', formattedRepoUrl);
+                    console.log('Updated remote origin URL with new token/address');
+                } else {
+                    console.log('Remote origin already matches target URL');
+                }
             }
 
             // 5. Push
